@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Hand Gesture Tree Visualizer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap');
+
+  :root {
+    --green: #00dc50;
+    --cyan: #00dcdc;
+    --yellow: #ffc800;
+    --dark: #080c10;
+    --panel: #0d1117;
+    --border: #1a2a1a;
+    --glow-green: 0 0 20px #00dc5066, 0 0 40px #00dc5033;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    background: var(--dark);
+    color: var(--green);
+    font-family: 'Share Tech Mono', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content:'';
+    position:fixed; inset:0; pointer-events:none; z-index:100;
+    background: repeating-linear-gradient(
+      0deg, transparent, transparent 2px,
+      rgba(0,0,0,0.08) 2px, rgba(0,0,0,0.08) 4px
+    );
+  }
+
+  header {
+    width:100%; padding:18px 32px;
+    border-bottom: 1px solid var(--border);
+    display:flex; align-items:center; justify-content:space-between;
+    background: linear-gradient(180deg, #0a140a 0%, transparent 100%);
+  }
+
+  .logo {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.1rem; font-weight: 900;
+    letter-spacing: 0.15em;
+    color: var(--green);
+    text-shadow: var(--glow-green);
+  }
+  .logo span { color: var(--cyan); }
+
+  .status-dot {
+    width:10px; height:10px; border-radius:50%;
+    background: #333; transition: background 0.3s;
+    box-shadow: none;
+    display:inline-block; margin-right:8px;
+  }
+  .status-dot.live { background: var(--green); box-shadow: var(--glow-green); }
+
+  #status-text { font-size:0.75rem; color:#556; }
+
+  /* Main layout */
+  .main {
+    display:flex; gap:20px; padding:20px;
+    width:100%; max-width:1100px;
+    align-items: flex-start;
+  }
+
+  /* Stream panel */
+  .stream-panel {
+    flex: 0 0 540px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+    background: #000;
+  }
+
+  .stream-panel::before {
+    content:'';
+    position:absolute; inset:0; pointer-events:none; z-index:2;
+    border: 1px solid var(--green);
+    border-radius: 4px;
+    box-shadow: inset 0 0 30px #00dc5010;
+    opacity: 0.4;
+  }
+
+  #output-img {
+    display:block; width:100%;
+    image-rendering: pixelated;
+  }
+
+  /* Corner decorations */
+  .corner {
+    position:absolute; width:16px; height:16px;
+    border-color: var(--cyan); border-style: solid;
+    z-index: 3;
+  }
+  .corner.tl { top:0; left:0; border-width:2px 0 0 2px; }
+  .corner.tr { top:0; right:0; border-width:2px 2px 0 0; }
+  .corner.bl { bottom:0; left:0; border-width:0 0 2px 2px; }
+  .corner.br { bottom:0; right:0; border-width:0 2px 2px 0; }
+
+  /* Sidebar */
+  .sidebar { flex:1; display:flex; flex-direction:column; gap:16px; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius:4px;
+    padding:18px;
+  }
+
+  .panel-title {
+    font-family: 'Orbitron', sans-serif;
+    font-size:0.65rem; font-weight:700;
+    letter-spacing:0.2em; color:var(--cyan);
+    margin-bottom:14px;
+    padding-bottom:8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* Controls */
+  .btn-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+
+  .btn {
+    padding:10px 14px;
+    background: transparent;
+    border: 1px solid var(--green);
+    color: var(--green);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    border-radius: 2px;
+    transition: all 0.15s;
+    text-align:center;
+  }
+  .btn:hover {
+    background: var(--green);
+    color: #000;
+    box-shadow: var(--glow-green);
+  }
+  .btn:active { transform:scale(0.97); }
+  .btn.danger { border-color:#dc0050; color:#dc0050; }
+  .btn.danger:hover { background:#dc0050; color:#fff; box-shadow:0 0 20px #dc005066; }
+  .btn.start-btn {
+    grid-column:1/-1;
+    border-color:var(--cyan); color:var(--cyan);
+    font-family:'Orbitron',sans-serif; font-weight:700;
+    padding:14px; font-size:0.8rem; letter-spacing:0.15em;
+  }
+  .btn.start-btn:hover { background:var(--cyan); color:#000; box-shadow:0 0 20px #00dcdc66; }
+  .btn.start-btn.active { background:var(--cyan); color:#000; }
+
+  /* Gesture guide */
+  .gesture-list { display:flex; flex-direction:column; gap:8px; }
+  .gesture-item { display:flex; gap:10px; align-items:flex-start; }
+  .gesture-tag {
+    flex:0 0 60px;
+    font-size:0.62rem; color:#000;
+    background:var(--green); padding:2px 6px;
+    border-radius:2px; text-align:center;
+    font-weight:700; letter-spacing:0.05em;
+  }
+  .gesture-tag.cyan { background:var(--cyan); }
+  .gesture-tag.yellow { background:var(--yellow); }
+  .gesture-tag.gray { background:#334; color:#aaa; }
+  .gesture-desc { font-size:0.68rem; color:#89a; line-height:1.4; }
+
+  /* Stats */
+  .stat-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .stat { background:#0a0f0a; border:1px solid var(--border); padding:8px 10px; border-radius:2px; }
+  .stat-label { font-size:0.55rem; color:#445; letter-spacing:0.1em; margin-bottom:2px; }
+  .stat-value { font-size:0.9rem; color:var(--green); font-family:'Orbitron',sans-serif; }
+
+  /* Hidden video element for capture */
+  #cam-video { display:none; }
+  #cap-canvas { display:none; }
+
+  /* Loader */
+  #loader {
+    position:absolute; inset:0; background:#000;
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:center;
+    z-index:10; gap:14px;
+  }
+  #loader.hidden { display:none; }
+  .loader-ring {
+    width:48px; height:48px; border-radius:50%;
+    border:2px solid var(--border);
+    border-top-color:var(--green);
+    animation:spin 1s linear infinite;
+  }
+  @keyframes spin { to{transform:rotate(360deg)} }
+  .loader-text { font-size:0.7rem; color:#445; letter-spacing:0.1em; }
+
+  /* Error banner */
+  #error-banner {
+    display:none;
+    background:#1a0008; border:1px solid #dc0050;
+    color:#dc0050; padding:10px 16px;
+    font-size:0.72rem; border-radius:2px;
+    margin-bottom:8px;
+  }
+
+  /* FPS indicator */
+  .fps-bar {
+    height:2px; background:var(--border);
+    border-radius:1px; margin-top:8px; overflow:hidden;
+  }
+  .fps-fill {
+    height:100%; width:0%; background:var(--green);
+    transition:width 0.3s, background 0.3s;
+  }
+
+  @media (max-width:800px) {
+    .main { flex-direction:column; }
+    .stream-panel { flex:none; width:100%; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">GESTURE<span>TREE</span> <span style="color:#334;font-size:0.7em">3D</span></div>
+  <div style="display:flex;align-items:center;gap:8px">
+    <span class="status-dot" id="status-dot"></span>
+    <span id="status-text">OFFLINE</span>
+  </div>
+</header>
+
+<div class="main">
+
+  <!-- Stream -->
+  <div class="stream-panel">
+    <div class="corner tl"></div><div class="corner tr"></div>
+    <div class="corner bl"></div><div class="corner br"></div>
+    <div id="loader">
+      <div class="loader-ring"></div>
+      <div class="loader-text">AWAITING CAMERA</div>
+    </div>
+    <img id="output-img" src="" alt="stream" style="display:none">
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+
+    <div id="error-banner"></div>
+
+    <!-- Controls -->
+    <div class="panel">
+      <div class="panel-title">// CONTROLS</div>
+      <div class="btn-grid">
+        <button class="btn start-btn" id="start-btn" onclick="toggleCamera()">▶ START CAMERA</button>
+        <button class="btn" onclick="sendAction('reset')">⟳ RESET</button>
+        <button class="btn" onclick="sendAction('randomize')">⚄ RANDOMIZE</button>
+        <button class="btn danger" onclick="sendAction('clear')">✕ CLEAR</button>
+      </div>
+      <div class="fps-bar"><div class="fps-fill" id="fps-fill"></div></div>
+    </div>
+
+    <!-- Stats -->
+    <div class="panel">
+      <div class="panel-title">// TELEMETRY</div>
+      <div class="stat-grid">
+        <div class="stat"><div class="stat-label">LATENCY</div><div class="stat-value" id="s-lat">—</div></div>
+        <div class="stat"><div class="stat-label">FRAMES</div><div class="stat-value" id="s-frm">0</div></div>
+        <div class="stat"><div class="stat-label">HANDS</div><div class="stat-value" id="s-hnd">0</div></div>
+        <div class="stat"><div class="stat-label">STATE</div><div class="stat-value" id="s-stt">IDLE</div></div>
+      </div>
+    </div>
+
+    <!-- Gesture guide -->
+    <div class="panel">
+      <div class="panel-title">// GESTURE GUIDE</div>
+      <div class="gesture-list">
+        <div class="gesture-item">
+          <span class="gesture-tag">LEFT ↓</span>
+          <span class="gesture-desc">Swipe down to grow tree</span>
+        </div>
+        <div class="gesture-item">
+          <span class="gesture-tag">LEFT ↔</span>
+          <span class="gesture-desc">Swipe left/right to rotate</span>
+        </div>
+        <div class="gesture-item">
+          <span class="gesture-tag cyan">RIGHT</span>
+          <span class="gesture-desc">Add branches (depth +1)</span>
+        </div>
+        <div class="gesture-item">
+          <span class="gesture-tag yellow">BOTH</span>
+          <span class="gesture-desc">Rotate tree together</span>
+        </div>
+        <div class="gesture-item">
+          <span class="gesture-tag yellow">SPREAD</span>
+          <span class="gesture-desc">Hands apart → EXPLODE!</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tips -->
+    <div class="panel" style="font-size:0.65rem;color:#445;line-height:1.8">
+      <div class="panel-title">// TIPS</div>
+      Good lighting helps hand detection.<br>
+      Keep hands within camera frame.<br>
+      Use RANDOMIZE for different tree shapes.<br>
+      RIGHT hand adds complexity — try 2-3×.
+    </div>
+
+  </div>
+</div>
+
+<video id="cam-video" autoplay playsinline muted></video>
+<canvas id="cap-canvas"></canvas>
+
+<script>
+const socket = io({ transports: ['websocket'] });
+let streaming = false;
+let frameCount = 0;
+let sendLoop = null;
+let lastSent = 0;
+let frameInterval = 80; // ms between frames (≈12fps to server)
+
+const video   = document.getElementById('cam-video');
+const canvas  = document.getElementById('cap-canvas');
+const ctx     = canvas.getContext('2d');
+const imgEl   = document.getElementById('output-img');
+const loader  = document.getElementById('loader');
+const dot     = document.getElementById('status-dot');
+const statTxt = document.getElementById('status-text');
+const startBtn= document.getElementById('start-btn');
+
+// ── Socket ────────────────────────────────────────────────────────────────────
+socket.on('connect', () => {
+  dot.classList.add('live');
+  statTxt.textContent = 'CONNECTED';
+});
+
+socket.on('disconnect', () => {
+  dot.classList.remove('live');
+  statTxt.textContent = 'DISCONNECTED';
+});
+
+socket.on('frame_out', (data) => {
+  const lat = Date.now() - lastSent;
+  imgEl.src = data.img;
+  imgEl.style.display = 'block';
+  loader.classList.add('hidden');
+  frameCount++;
+
+  document.getElementById('s-lat').textContent = lat + 'ms';
+  document.getElementById('s-frm').textContent = frameCount;
+
+  // FPS fill bar (capped at 30fps = 100%)
+  const fps = 1000 / Math.max(lat, 1);
+  const pct = Math.min(fps / 30 * 100, 100);
+  const fill = document.getElementById('fps-fill');
+  fill.style.width = pct + '%';
+  fill.style.background = pct > 60 ? '#00dc50' : pct > 30 ? '#ffc800' : '#dc0050';
+});
+
+// ── Camera ────────────────────────────────────────────────────────────────────
+async function toggleCamera() {
+  if (streaming) {
+    stopCamera();
+  } else {
+    await startCamera();
+  }
+}
+
+async function startCamera() {
+  const errBanner = document.getElementById('error-banner');
+  errBanner.style.display = 'none';
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width:640, height:480, facingMode:'user' }, audio:false
+    });
+    video.srcObject = stream;
+    await new Promise(r => video.onloadedmetadata = r);
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    streaming = true;
+    startBtn.textContent = '■ STOP CAMERA';
+    startBtn.classList.add('active');
+    dot.classList.add('live');
+    statTxt.textContent = 'STREAMING';
+    document.getElementById('s-stt').textContent = 'LIVE';
+
+    sendLoop = setInterval(captureAndSend, frameInterval);
+  } catch(e) {
+    errBanner.style.display = 'block';
+    errBanner.textContent = 'Camera error: ' + e.message;
+  }
+}
+
+function stopCamera() {
+  streaming = false;
+  clearInterval(sendLoop);
+  if (video.srcObject) {
+    video.srcObject.getTracks().forEach(t => t.stop());
+    video.srcObject = null;
+  }
+  startBtn.textContent = '▶ START CAMERA';
+  startBtn.classList.remove('active');
+  statTxt.textContent = 'STOPPED';
+  document.getElementById('s-stt').textContent = 'IDLE';
+}
+
+function captureAndSend() {
+  if (!streaming || video.readyState < 2) return;
+  ctx.drawImage(video, 0, 0);
+  const b64 = canvas.toDataURL('image/jpeg', 0.6);
+  lastSent = Date.now();
+  socket.emit('frame', b64);
+  document.getElementById('s-hnd').textContent = '?';
+}
+
+function sendAction(type) {
+  socket.emit('action', { type });
+}
+</script>
+</body>
+</html>
