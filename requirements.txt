@@ -1,7 +1,3 @@
 opencv-python
 mediapipe
 numpy
-pillow
-pyopengl
-pygame
-scipy
