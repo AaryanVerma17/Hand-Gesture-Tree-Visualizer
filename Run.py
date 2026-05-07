@@ -1,3 +1,7 @@
+import os
+if os.environ.get("RENDER"):
+    print("This app requires a webcam and display. Please run locally.")
+    sys.exit(0)
 #!/usr/bin/env python3
 
 import subprocess, sys, time, math, random, collections
