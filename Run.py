@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 
 import subprocess, sys, time, math, random, collections
-import mediapipe as mp
-mp_hands = mp.solutions.hands
 
 for pkg in ["opencv-python", "mediapipe", "numpy"]:
     subprocess.check_call([sys.executable, "-m", "pip", "install", pkg, "-q"],
