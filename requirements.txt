@@ -5,4 +5,4 @@ mediapipe==0.10.13
 numpy==1.26.4
 eventlet==0.36.1
 gunicorn==22.0.0
-python==3.10.0
+python==3.10.2
