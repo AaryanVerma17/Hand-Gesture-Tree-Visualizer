@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+import urllib.request
+
+MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+HAND_MODEL_PATH = "hand_landmarker.task"
+if not os.path.exists(HAND_MODEL_PATH):
+    print("Downloading hand_landmarker.task...")
+    urllib.request.urlretrieve(MODEL_URL, HAND_MODEL_PATH)
+    print("Downloaded.")
 """
 Hand Gesture 3D Tree Visualizer — Flask/SocketIO backend for Render deployment.
 Browser captures webcam → sends base64 frames → server runs MediaPipe → returns rendered frame.
@@ -7,9 +15,17 @@ Browser captures webcam → sends base64 frames → server runs MediaPipe → re
 import os, math, random, time, collections, base64, io
 import numpy as np
 import cv2
-import mediapipe as mp
 from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
+
+# --- NEW MEDIAPIPE TASKS API IMPORTS ---
+from mediapipe.tasks.python.vision import HandLandmarker, HandLandmarkerOptions
+from mediapipe.tasks.python import BaseOptions
+from mediapipe.tasks.python.vision import RunningMode as VisionRunningMode
+from mediapipe import Image as MPImage
+from mediapipe import ImageFormat
+
+HAND_MODEL_PATH = "hand_landmarker.task"  # Download this model and place in your project root
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "gesture-tree-secret")
@@ -23,8 +39,15 @@ CAM_H  = 300
 BAR_H  = 30
 TOTAL_H = VIZ_H + CAM_H + BAR_H
 
-mp_hands    = mp.solutions.hands
-CONNECTIONS = list(mp_hands.HAND_CONNECTIONS)
+# HAND CONNECTIONS (from mediapipe docs)
+CONNECTIONS = [
+    (0,1),(1,2),(2,3),(3,4),      # Thumb
+    (0,5),(5,6),(6,7),(7,8),      # Index
+    (5,9),(9,10),(10,11),(11,12), # Middle
+    (9,13),(13,14),(14,15),(15,16), # Ring
+    (13,17),(17,18),(18,19),(19,20), # Pinky
+    (0,17)
+]
 
 CX, CY   = 270, 240
 SCALE    = 195
@@ -167,7 +190,9 @@ GREEN=(0,220,80);CYAN=(0,220,220);YELLOW=(0,200,255);WHITE=(255,255,255);GRAY=(1
 
 def draw_landmarks(frame, lms, fw, fh, dot_color, label, label_color):
     pts={}
-    for i,lm in enumerate(lms.landmark): pts[i]=(int(lm.x*fw),int(lm.y*fh))
+    for i,lm in enumerate(lms):
+        px, py = int(lm.x*fw), int(lm.y*fh)
+        pts[i]=(px, py)
     for a,b in CONNECTIONS:
         if a in pts and b in pts: cv2.line(frame,pts[a],pts[b],(180,180,180),1,cv2.LINE_AA)
     for i,(px,py) in pts.items():
@@ -201,6 +226,14 @@ def draw_viz_ui(viz, branches, points, fps):
 # ── Per-session state ─────────────────────────────────────────────────────────
 sessions = {}
 
+def create_hand_detector():
+    options = HandLandmarkerOptions(
+        base_options=BaseOptions(model_asset_path=HAND_MODEL_PATH),
+        running_mode=VisionRunningMode.IMAGE,
+        num_hands=2
+    )
+    return HandLandmarker.create_from_options(options)
+
 def new_state(seed=7, maxd=9):
     print(f" Building tree seed={seed} maxd={maxd}...")
     tree_arr = make_tree(maxd=maxd, seed=seed)
@@ -217,9 +250,7 @@ def new_state(seed=7, maxd=9):
         "both_prev_x": None,
         "fps_ring": collections.deque(maxlen=30),
         "prev_t": time.time(),
-        "detector": mp_hands.Hands(
-            static_image_mode=False, max_num_hands=2,
-            min_detection_confidence=0.6, min_tracking_confidence=0.5),
+        "detector": create_hand_detector(),
     }
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -240,7 +271,6 @@ def on_disconnect():
     from flask_socketio import request as sreq
     sid = sreq.sid
     if sid in sessions:
-        sessions[sid]["detector"].close()
         del sessions[sid]
     print(f"[-] Client disconnected: {sid}")
 
@@ -286,32 +316,39 @@ def on_frame(data):
     frame = cv2.flip(frame, 1)
     frame = cv2.resize(frame, (W, CAM_H))
     rgb   = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = s["detector"].process(rgb)
+
+# --- NEW HAND DETECTION ---
+    mp_image = MPImage(image_format=ImageFormat.SRGB, data=rgb)
+    results = s["detector"].detect(mp_image)
 
     # Hand parsing
     left_lm = right_lm = None
-    if results.multi_hand_landmarks:
-        for i,lm in enumerate(results.multi_hand_landmarks):
-            if i < len(results.multi_handedness):
-                lbl = results.multi_handedness[i].classification[0].label
-                if lbl == "Right": left_lm = lm
-                else:              right_lm = lm
+    handedness = results.handedness if hasattr(results, "handedness") else []
+    hand_landmarks = results.hand_landmarks if hasattr(results, "hand_landmarks") else []
+
+    for i, lm in enumerate(hand_landmarks):
+        if i < len(handedness):
+            label = handedness[i][0].category_name
+            if label == "Left":
+                left_lm = lm
+            elif label == "Right":
+                right_lm = lm
 
     # Gesture logic (same as original)
     if left_lm and right_lm:
-        mid_x = (left_lm.landmark[0].x + right_lm.landmark[0].x)/2
+        mid_x = (left_lm[0].x + right_lm[0].x)/2
         if s["both_prev_x"] is not None:
             s["cube_ry"] += (mid_x - s["both_prev_x"])*6.0
         s["both_prev_x"] = mid_x; s["left_prev"] = None
-        spread = math.hypot(left_lm.landmark[0].x - right_lm.landmark[0].x,
-                            left_lm.landmark[0].y - right_lm.landmark[0].y)
+        spread = math.hypot(left_lm[0].x - right_lm[0].x,
+                            left_lm[0].y - right_lm[0].y)
         if spread > 0.38 and not s["exploded"] and s["state"]==1:
             s["state"] = 2; s["exploded"] = True
             s["particles"] = spawn_particles(s["tree_arr"])
     else:
         s["both_prev_x"] = None
         if left_lm and not right_lm:
-            lx = left_lm.landmark[0].x; ly = left_lm.landmark[0].y
+            lx = left_lm[0].x; ly = left_lm[0].y
             if s["state"] == 0: s["state"] = 1; s["exploded"] = False
             if s["left_prev"]:
                 dy = ly - s["left_prev"][1]; dx = lx - s["left_prev"][0]
@@ -353,14 +390,13 @@ def on_frame(data):
         cv2.rectangle(viz,(10,VIZ_H-4),(10+bw,VIZ_H-1),(0,220,80),-1)
 
     # Landmarks on cam frame
-    if results.multi_hand_landmarks:
-        for i,lm in enumerate(results.multi_hand_landmarks):
-            if i<len(results.multi_handedness):
-                lbl = results.multi_handedness[i].classification[0].label
-                if lbl=="Right":
-                    draw_landmarks(frame,lm,W,CAM_H,(0,220,80),"GRAB\nMOVE",(0,220,80))
-                else:
-                    draw_landmarks(frame,lm,W,CAM_H,(255,160,0),"ADD\nBRANCHES",(255,160,0))
+    for i, lm in enumerate(hand_landmarks):
+        if i < len(handedness):
+            label = handedness[i][0].category_name
+            if label == "Left":
+                draw_landmarks(frame, lm, W, CAM_H, (0,220,80), "GRAB\nMOVE", (0,220,80))
+            else:
+                draw_landmarks(frame, lm, W, CAM_H, (255,160,0), "ADD\nBRANCHES", (255,160,0))
 
     # Status bar
     num_hands = (1 if left_lm else 0)+(1 if right_lm else 0)
