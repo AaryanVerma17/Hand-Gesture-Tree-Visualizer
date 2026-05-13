@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: hand-gesture-tree
+    env: python
+    pythonVersion: "3.12.0"
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --worker-class eventlet -w 1 Run:app
