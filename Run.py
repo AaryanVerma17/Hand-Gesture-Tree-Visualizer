@@ -29,7 +29,7 @@ HAND_MODEL_PATH = "hand_landmarker.task"  # Download this model and place in you
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "gesture-tree-secret")
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="gevent",
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet",
                     max_http_buffer_size=5 * 1024 * 1024)
 
 # ── Layout ────────────────────────────────────────────────────────────────────
