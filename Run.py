@@ -1,29 +1,22 @@
-#!/usr/bin/env python3
-import urllib.request
-
-MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
-HAND_MODEL_PATH = "hand_landmarker.task"
-if not os.path.exists(HAND_MODEL_PATH):
-    print("Downloading hand_landmarker.task...")
-    urllib.request.urlretrieve(MODEL_URL, HAND_MODEL_PATH)
-    print("Downloaded.")
-"""
-Hand Gesture 3D Tree Visualizer — Flask/SocketIO backend for Render deployment.
-Browser captures webcam → sends base64 frames → server runs MediaPipe → returns rendered frame.
-"""
-
 import os, math, random, time, collections, base64, io
 import numpy as np
 import cv2
 from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
-
-# --- NEW MEDIAPIPE TASKS API IMPORTS ---
 from mediapipe.tasks.python.vision import HandLandmarker, HandLandmarkerOptions
 from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python.vision import RunningMode as VisionRunningMode
 from mediapipe import Image as MPImage
 from mediapipe import ImageFormat
+
+# Auto-download model
+HAND_MODEL_PATH = "hand_landmarker.task"
+import urllib.request
+MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+if not os.path.exists(HAND_MODEL_PATH):
+    print("Downloading hand_landmarker.task...")
+    urllib.request.urlretrieve(MODEL_URL, HAND_MODEL_PATH)
+    print("Download complete.")
 
 HAND_MODEL_PATH = "hand_landmarker.task"  # Download this model and place in your project root
 
